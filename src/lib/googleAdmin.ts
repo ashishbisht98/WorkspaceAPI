@@ -27,6 +27,7 @@ function getAuth() {
   });
 }
 
+
 function getServiceAccountCredentials() {
   const json = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
   const base64Json = process.env.GOOGLE_SERVICE_ACCOUNT_JSON_BASE64;
