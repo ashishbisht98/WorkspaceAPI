@@ -1,0 +1,37 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f5f6f4;
+  --foreground: #14231c;
+  --paper: #ffffff;
+  --ink: #14231c;
+  --ink-soft: #4b5a51;
+  --rule: #d9ddd4;
+  --accent: #2e5339;
+  --accent-soft: #e7ede6;
+  --gold: #b8873a;
+  --gold-soft: #f6ecd9;
+  --danger: #a3402f;
+  --danger-soft: #f7e6e1;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+}
+
+.paper-card {
+  background: var(--paper);
+  border: 1px solid var(--rule);
+}
+
+.field-ledger-line {
+  background-image: linear-gradient(to right, var(--rule) 1px, transparent 1px);
+}
