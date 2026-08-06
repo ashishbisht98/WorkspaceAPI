@@ -81,6 +81,13 @@ export interface WorkspaceEmailLookupResult {
   logs: string[];
 }
 
+export interface OldMailCheckResult {
+  requestedEmail: string;
+  found: boolean;
+  account: WorkspaceAccount | null;
+  logs: string[];
+}
+
 export interface RemoveAliasRequestBody {
   oldWorkspaceEmails: string[];
 }
@@ -99,4 +106,29 @@ export interface RemoveAliasResult {
   results: RemoveAliasItemResult[];
   message: string;
   logs: string[];
+}
+
+export type RenameRequestStatus = "pending" | "approved" | "rejected";
+
+/** 0 = creation (new account), 1 = reactivation/rename (existing account). */
+export type RenameRequestType = 0 | 1;
+
+export interface RenameRequest {
+  id: string;
+  employeeId: string;
+  requestType: RenameRequestType;
+  currentEmail: string | null;
+  note: string | null;
+  status: RenameRequestStatus;
+  adminNote: string | null;
+  processedBy: string | null;
+  processedAt: string | null;
+  createdAt: string;
+}
+
+export interface CreateRenameRequestBody {
+  employeeId: string;
+  requestType: RenameRequestType;
+  currentEmail?: string;
+  note?: string;
 }

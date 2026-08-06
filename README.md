@@ -33,7 +33,7 @@ If `API_SECRET_TOKEN` is empty, the API routes are unprotected.
 
 ## Endpoints
 
-All endpoints accept `POST` JSON.
+Most endpoints accept `POST` JSON; a few employee/status-check routes also accept `GET` with query params.
 
 ```bash
 curl -X POST https://your-project.vercel.app/api/employee \
@@ -42,75 +42,4 @@ curl -X POST https://your-project.vercel.app/api/employee \
   -d '{"employeeId":"12345678"}'
 ```
 
-- `/api/employee`: fetch employee details and expected Workspace username.
-- `/api/workspace-email`: look up a Workspace account by old email.
-- `/api/process`: create, update, or rename a Workspace account.
-- `/api/workspace-alias/remove`: remove one or more old Workspace aliases.
-- `/api/tablet/details`: fetch tablet registration details.
-- `/api/tablet/unregister`: deregister an employee tablet registration.
-- `/api/guest/password-reset`: reset a guest teacher password to `New`.
-
-### Request Bodies
-
-`/api/employee`
-
-```json
-{ "employeeId": "12345678" }
-```
-
-`/api/workspace-email`
-
-```json
-{
-  "employeeId": "12345678",
-  "firstName": "Amit",
-  "oldWorkspaceEmail": "old.user@example.gov.in"
-}
-```
-
-`/api/process`
-
-```json
-{
-  "employeeId": "12345678",
-  "oldWorkspaceEmail": "old.user@example.gov.in",
-  "fullName": "Amit Kumar",
-  "targetWorkspaceEmail": "12345678.amit@example.gov.in"
-}
-```
-
-Only `employeeId` is required. The other fields are overrides.
-
-`/api/workspace-alias/remove`
-
-```json
-{ "oldWorkspaceEmails": ["old.user@example.gov.in"] }
-```
-
-`/api/tablet/details`
-
-```json
-{ "employeeId": "12345678" }
-```
-
-`/api/tablet/unregister`
-
-```json
-{
-  "employeeId": "12345678",
-  "employeeType": "government",
-  "personalEmail": "employee@example.com",
-  "fullName": "Amit Kumar"
-}
-```
-
-`employeeType`, `personalEmail`, and `fullName` are optional. The API will try to resolve missing notification details.
-
-`/api/guest/password-reset`
-
-```json
-{
-  "employeeId": "1234567890",
-  "newPassword": "New"
-}
-```
+See **[DOCUMENTATION.md](DOCUMENTATION.md)** for the full API reference (every endpoint, request/response JSON, error cases), the admin dashboard's request/review/approve flow, and the UI action-button-to-API mapping.

@@ -46,16 +46,103 @@ function getServiceAccountCredentials() {
 
 
 function parseCredentials(value: string) {
-  const credentials = JSON.parse(value);
-  if (
-    credentials &&
-    typeof credentials === "object" &&
-    "private_key" in credentials &&
-    typeof credentials.private_key === "string"
-  ) {
-    credentials.private_key = credentials.private_key.replace(/\\n/g, "\n");
+  const trimmed = value.trim();
+  if (!trimmed) {
+    throw new Error("GOOGLE_SERVICE_ACCOUNT_JSON is empty.");
   }
-  return credentials;
+
+  try {
+    const credentials = JSON.parse(trimmed);
+    return normalizeCredentials(credentials);
+  } catch (jsonError) {
+    try {
+      const credentials = new Function(`return (${trimmed});`)();
+      return normalizeCredentials(credentials);
+    } catch (jsError) {
+      const repaired = repairJsonWithLiteralNewlines(trimmed);
+      if (!repaired) {
+        throw new Error(
+          `GOOGLE_SERVICE_ACCOUNT_JSON is not valid JSON: ${
+            jsonError instanceof Error ? jsonError.message : "Unknown parse error"
+          }`,
+        );
+      }
+
+      try {
+        const credentials = JSON.parse(repaired);
+        return normalizeCredentials(credentials);
+      } catch (parseError) {
+        throw new Error(
+          `GOOGLE_SERVICE_ACCOUNT_JSON is not valid JSON: ${
+            parseError instanceof Error ? parseError.message : "Unknown parse error"
+          }`,
+        );
+      }
+    }
+  }
+}
+
+function normalizeCredentials(credentials: unknown) {
+  if (!credentials || typeof credentials !== "object" || Array.isArray(credentials)) {
+    throw new Error("GOOGLE_SERVICE_ACCOUNT_JSON must contain a JSON object.");
+  }
+
+  const normalized = credentials as Record<string, unknown>;
+  if (
+    "private_key" in normalized &&
+    typeof normalized.private_key === "string"
+  ) {
+    normalized.private_key = normalized.private_key.replace(/\\n/g, "\n");
+  }
+
+  return normalized;
+}
+
+function repairJsonWithLiteralNewlines(value: string): string | null {
+  let result = "";
+  let inString = false;
+  let escaped = false;
+  let stringQuote: '"' | "'" | null = null;
+
+  for (let i = 0; i < value.length; i++) {
+    const char = value[i];
+
+    if (escaped) {
+      result += char;
+      escaped = false;
+      continue;
+    }
+
+    if (char === "\\") {
+      result += char;
+      escaped = true;
+      continue;
+    }
+
+    if (inString) {
+      if (char === stringQuote) {
+        inString = false;
+        stringQuote = null;
+        result += char;
+      } else if (char === "\n" || char === "\r") {
+        result += "\\n";
+      } else {
+        result += char;
+      }
+      continue;
+    }
+
+    if (char === '"' || char === "'") {
+      inString = true;
+      stringQuote = char;
+      result += '"';
+      continue;
+    }
+
+    result += char;
+  }
+
+  return inString ? null : result;
 }
 
 async function getAdmin(): Promise<admin_directory_v1.Admin> {
@@ -140,6 +227,65 @@ export async function findWorkspaceAccountByEmail(
     const user = await admin.users.get({ userKey: email });
     if (!user.data.primaryEmail) return null;
     return toWorkspaceAccount(user.data, employeeId, firstName);
+  } catch (err: unknown) {
+    if (!isNotFoundError(err)) {
+      throw err;
+    }
+  }
+
+  return findWorkspaceAccountByEmployeeId(employeeId, firstName);
+}
+
+/**
+ * Looks up a Workspace account by its exact email address, with no fallback.
+ * Used to check whether an old/legacy email still exists in Workspace.
+ */
+export async function getWorkspaceAccountByEmail(
+  email: string,
+): Promise<WorkspaceAccount | null> {
+  const admin = await getAdmin();
+
+  try {
+    const user = await admin.users.get({ userKey: email });
+    const primaryEmail = user.data.primaryEmail;
+    if (!primaryEmail) return null;
+
+    // isNewFormat needs an employeeId to compare against; derive it from the
+    // account's own local part (the digits before the first dot), since this
+    // lookup has no employeeId of its own to pass in.
+    const localPart = primaryEmail.split("@")[0] || "";
+    const employeeId = /^(\d+)\./.exec(localPart)?.[1] || "";
+
+    return toWorkspaceAccount(user.data, employeeId, "");
+  } catch (err: unknown) {
+    if (isNotFoundError(err)) return null;
+    throw err;
+  }
+}
+
+export async function findWorkspaceAccountByEmployeeId(
+  employeeId: string,
+  firstName: string,
+): Promise<WorkspaceAccount | null> {
+  const admin = await getAdmin();
+  const domain = getDomain();
+
+  try {
+    const res = await admin.users.list({
+      domain,
+      query: `email:${employeeId}.*`,
+      maxResults: 20,
+    });
+
+    const matches = (res.data.users || []).filter((user) => {
+      const primaryEmail = user.primaryEmail || "";
+      return primaryEmail.toLowerCase().startsWith(`${employeeId.toLowerCase()}.`);
+    });
+
+    const match = matches[0];
+    if (!match?.primaryEmail) return null;
+
+    return toWorkspaceAccount(match, employeeId, firstName);
   } catch (err: unknown) {
     if (isNotFoundError(err)) return null;
     throw err;

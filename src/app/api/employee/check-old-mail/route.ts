@@ -1,52 +1,39 @@
 import { NextRequest, NextResponse } from "next/server";
-import { findWorkspaceAccountByEmployeeId } from "@/lib/googleAdmin";
-import { isValidEmployeeId } from "@/lib/username";
+import { getWorkspaceAccountByEmail } from "@/lib/googleAdmin";
+import { OldMailCheckResult } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-interface EmployeeAccountCheckRequestBody {
-  employeeId?: string;
+interface OldMailCheckRequestBody {
+  email?: string;
 }
 
-interface EmployeeAccountCheckResult {
-  employeeId: string;
-  requestedEmail: string;
-  found: boolean;
-  account: {
-    primaryEmail: string;
-    fullName: string;
-    suspended: boolean;
-    orgUnitPath?: string;
-    lastLoginTime?: string;
-    isNewFormat: boolean;
-  } | null;
-  logs: string[];
-}
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function buildErrorResponse(message: string, logs: string[], status = 400) {
   return NextResponse.json({ error: message, logs }, { status });
 }
 
-async function runEmployeeCheck(employeeIdInput: string, logs: string[]) {
+async function runOldMailCheck(emailInput: string, logs: string[]) {
   const log = (msg: string) => logs.push(msg);
 
-  const employeeId = employeeIdInput.trim().replace(/\.$/, "");
-  if (!isValidEmployeeId(employeeId)) {
+  const email = emailInput.trim().toLowerCase();
+  if (!EMAIL_REGEX.test(email)) {
     return buildErrorResponse(
-      "Employee ID must be exactly 8 digits, e.g. 20192794.",
+      "A valid email address is required, e.g. old.user@example.gov.in.",
       logs,
       400,
     );
   }
 
-  log(`Checking Workspace accounts for employee ID ${employeeId}...`);
-  const account = await findWorkspaceAccountByEmployeeId(employeeId, "");
+  log(`Checking Workspace for ${email}...`);
+  const account = await getWorkspaceAccountByEmail(email);
+  log(account ? `Found ${account.primaryEmail}.` : "No Workspace account found.");
 
-  const result: EmployeeAccountCheckResult = {
-    employeeId,
-    requestedEmail: account?.primaryEmail || "",
+  const result: OldMailCheckResult = {
+    requestedEmail: email,
     found: !!account,
     account,
     logs,
@@ -57,10 +44,10 @@ async function runEmployeeCheck(employeeIdInput: string, logs: string[]) {
 
 export async function GET(req: NextRequest) {
   const logs: string[] = [];
-  const employeeIdInput = (req.nextUrl.searchParams.get("employeeId") || "").trim();
+  const emailInput = (req.nextUrl.searchParams.get("email") || "").trim();
 
   try {
-    return await runEmployeeCheck(employeeIdInput, logs);
+    return await runOldMailCheck(emailInput, logs);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Unexpected error";
     logs.push(`Error: ${message}`);
@@ -71,7 +58,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const logs: string[] = [];
-  const queryEmployeeId = (req.nextUrl.searchParams.get("employeeId") || "").trim();
+  const queryEmail = (req.nextUrl.searchParams.get("email") || "").trim();
 
   try {
     const MAX_BODY = 10 * 1024; // 10 KB
@@ -95,21 +82,21 @@ export async function POST(req: NextRequest) {
     const rawBody = await req.text();
     if (!rawBody.trim()) {
       return buildErrorResponse(
-        "Missing request body. Send a JSON body like {\"employeeId\":\"20192794\"} or use ?employeeId=20192794.",
+        "Missing request body. Send a JSON body like {\"email\":\"old.user@example.gov.in\"} or use ?email=old.user@example.gov.in.",
         logs,
         400,
       );
     }
 
-    let body: EmployeeAccountCheckRequestBody;
+    let body: OldMailCheckRequestBody;
     try {
-      body = JSON.parse(rawBody) as EmployeeAccountCheckRequestBody;
+      body = JSON.parse(rawBody) as OldMailCheckRequestBody;
     } catch {
       return buildErrorResponse("Request body must be valid JSON.", logs, 400);
     }
 
-    const employeeIdInput = (body.employeeId || queryEmployeeId).trim();
-    return await runEmployeeCheck(employeeIdInput, logs);
+    const emailInput = (body.email || queryEmail).trim();
+    return await runOldMailCheck(emailInput, logs);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Unexpected error";
     logs.push(`Error: ${message}`);

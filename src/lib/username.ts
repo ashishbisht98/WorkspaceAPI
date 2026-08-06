@@ -20,9 +20,25 @@ export function getDomain(): string {
   return DOMAIN;
 }
 
-/** True if the given primary email exactly matches the expected new format. */
+/** True if the given primary email matches the expected new-format pattern for the employee. */
 export function isNewFormat(primaryEmail: string, employeeId: string, firstName: string): boolean {
-  return primaryEmail.toLowerCase() === buildExpectedUsername(employeeId, firstName).toLowerCase();
+  const cleanEmail = primaryEmail.trim().toLowerCase();
+  const cleanId = employeeId.trim().toLowerCase();
+
+  if (!cleanEmail || !cleanId) return false;
+
+  if (firstName) {
+    return cleanEmail === buildExpectedUsername(employeeId, firstName).toLowerCase();
+  }
+
+  const [localPart] = cleanEmail.split("@");
+  if (!localPart) return false;
+
+  const prefix = `${cleanId}.`;
+  if (!localPart.startsWith(prefix)) return false;
+
+  const suffix = localPart.slice(prefix.length);
+  return suffix.length > 0 && !suffix.includes(".");
 }
 
 /** True if the email's local part starts with "employeeid." (i.e. belongs to this employee in some form). */
@@ -33,6 +49,22 @@ export function belongsToEmployeeId(primaryEmail: string, employeeId: string): b
 
 export function isValidEmployeeId(employeeId: string): boolean {
   return /^\d{8}$/.test(employeeId);
+}
+
+/**
+ * True if `email` is a plausible personal email address. Employees often
+ * mistype their Gmail address (abc@gmaail.com, abc@gmail.co, abc@gmai) — if
+ * the domain contains a "g" it's almost certainly meant to be Gmail, so
+ * require it to match gmail.com exactly rather than accepting near-misses.
+ */
+export function isValidPersonalEmail(email: string): boolean {
+  const trimmed = email.trim();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) return false;
+
+  const domain = trimmed.slice(trimmed.indexOf("@") + 1).toLowerCase();
+  if (domain.includes("g") && domain !== "gmail.com") return false;
+
+  return true;
 }
 
 /** Generates a random, Workspace-policy-friendly temporary password. */
