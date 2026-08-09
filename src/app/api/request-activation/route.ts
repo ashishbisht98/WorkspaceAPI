@@ -20,6 +20,14 @@ export async function POST(req: NextRequest) {
     const currentEmail = (body.currentEmail || "").trim().toLowerCase();
     const note = body.note?.trim();
 
+    // Optional cached employee details, used only to prefill the admin
+    // review panel — not authoritative (the approval flow always re-fetches
+    // from the employee API). Silently dropped if malformed rather than
+    // failing the whole request.
+    const fullName = body.fullName?.trim() || undefined;
+    const personalEmail = body.personalEmail?.trim().toLowerCase();
+    const mobile = body.mobile?.trim() || undefined;
+
     if (!isValidEmployeeId(employeeId)) {
       return NextResponse.json(
         { error: "Employee ID must be exactly 8 digits." },
@@ -50,6 +58,9 @@ export async function POST(req: NextRequest) {
       requestType,
       currentEmail: requestType === 1 ? currentEmail : currentEmail || undefined,
       note,
+      fullName,
+      personalEmail: personalEmail && isValidEmail(personalEmail) ? personalEmail : undefined,
+      mobile,
     });
 
     return NextResponse.json({ request }, { status: 201 });

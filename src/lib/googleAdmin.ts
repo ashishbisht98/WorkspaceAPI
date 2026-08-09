@@ -1,11 +1,19 @@
-import { google, admin_directory_v1 } from "googleapis";
+import { google, admin_directory_v1, admin_reports_v1 } from "googleapis";
 import { readFileSync } from "node:fs";
 import { WorkspaceAccount } from "./types";
 import { getDomain, isNewFormat, belongsToEmployeeId } from "./username";
 
-const SCOPES = ["https://www.googleapis.com/auth/admin.directory.user"];
+const DIRECTORY_SCOPES = ["https://www.googleapis.com/auth/admin.directory.user"];
+// Needed for getUserStorageUsageMB(). Requires separately authorizing this
+// scope for the service account's domain-wide delegation in the Workspace
+// Admin console (Security > API controls > Domain-wide delegation) — see
+// README. Kept on its own auth client (below) so that a not-yet-authorized
+// Reports scope can't take down the Directory API calls too — Google's
+// domain-wide delegation check is all-or-nothing per requested scope set.
+const REPORTS_SCOPES = ["https://www.googleapis.com/auth/admin.reports.usage.readonly"];
 
 let cachedClient: admin_directory_v1.Admin | null = null;
+let cachedReportsClient: admin_reports_v1.Admin | null = null;
 
 /**
  * Authenticates as a service account with domain-wide delegation,
@@ -17,12 +25,12 @@ let cachedClient: admin_directory_v1.Admin | null = null;
  *     scopes above.
  *  3. Put the service account JSON key path/contents in env vars below.
  */
-function getAuth() {
+function getAuth(scopes: string[]) {
   const impersonate = process.env.GOOGLE_ADMIN_IMPERSONATE_EMAIL;
 
   return new google.auth.GoogleAuth({
     credentials: getServiceAccountCredentials(),
-    scopes: SCOPES,
+    scopes,
     clientOptions: { subject: impersonate },
   });
 }
@@ -147,9 +155,58 @@ function repairJsonWithLiteralNewlines(value: string): string | null {
 
 async function getAdmin(): Promise<admin_directory_v1.Admin> {
   if (cachedClient) return cachedClient;
-  const auth = getAuth();
+  const auth = getAuth(DIRECTORY_SCOPES);
   cachedClient = google.admin({ version: "directory_v1", auth });
   return cachedClient;
+}
+
+async function getReportsAdmin(): Promise<admin_reports_v1.Admin> {
+  if (cachedReportsClient) return cachedReportsClient;
+  const auth = getAuth(REPORTS_SCOPES);
+  cachedReportsClient = google.admin({ version: "reports_v1", auth });
+  return cachedReportsClient;
+}
+
+function isReportsDataUnavailableError(err: unknown): boolean {
+  if (typeof err !== "object" || err === null) return false;
+  const code = "code" in err ? err.code : "status" in err ? err.status : undefined;
+  // The Reports API returns 400/404 for dates it hasn't generated usage data
+  // for yet (recent days, or accounts too new to have a report). Treat those
+  // as "not available", distinct from real errors like 403 (missing scope).
+  return code === 400 || code === 404;
+}
+
+/**
+ * Best-effort total storage usage (Gmail + Drive + Photos, in MB) via the
+ * Admin Reports API. Usage reports typically lag 1-3 days behind, so this
+ * walks backward from yesterday looking for the most recent available report.
+ * Returns null if no report is available in that window (e.g. a brand-new
+ * account) — callers should treat that as "unknown", not an error.
+ */
+export async function getUserStorageUsageMB(email: string): Promise<number | null> {
+  const admin = await getReportsAdmin();
+
+  for (let daysAgo = 1; daysAgo <= 5; daysAgo++) {
+    const date = new Date();
+    date.setUTCDate(date.getUTCDate() - daysAgo);
+    const dateStr = date.toISOString().slice(0, 10);
+
+    try {
+      const res = await admin.userUsageReport.get({
+        userKey: email,
+        date: dateStr,
+        parameters: "accounts:used_quota_in_mb",
+      });
+      const raw = res.data.usageReports?.[0]?.parameters?.find(
+        (p) => p.name === "accounts:used_quota_in_mb",
+      )?.intValue;
+      if (raw !== undefined && raw !== null) return Number(raw);
+    } catch (err: unknown) {
+      if (!isReportsDataUnavailableError(err)) throw err;
+    }
+  }
+
+  return null;
 }
 
 function toWorkspaceAccount(
@@ -342,6 +399,13 @@ export async function createAccount(params: {
   });
 }
 
+/**
+ * Renames the account's primary email. Google Workspace automatically keeps
+ * the old address as an alias of the renamed account — that's intentional
+ * here (not cleaned up immediately) so the old address keeps working during
+ * a grace period. It's tracked in the `alias` table by the approval flow and
+ * removed later via the admin panel's Alias tab, not deleted at rename time.
+ */
 export async function renameAccount(
   oldEmail: string,
   newEmail: string,
@@ -351,13 +415,6 @@ export async function renameAccount(
     userKey: oldEmail,
     requestBody: { primaryEmail: newEmail },
   });
-
-  try {
-    await admin.users.aliases.delete({
-      userKey: newEmail,
-      alias: oldEmail,
-    });
-  } catch {}
 }
 
 export async function removeAliasByEmail(aliasEmail: string): Promise<{

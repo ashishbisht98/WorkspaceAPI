@@ -88,6 +88,13 @@ export interface OldMailCheckResult {
   logs: string[];
 }
 
+/** Existence/status + storage usage for an arbitrary Workspace address, used by the admin review panel. */
+export interface WorkspaceAccountStatus {
+  account: WorkspaceAccount | null;
+  /** Total Gmail+Drive+Photos usage in MB, from the Admin Reports API. Null if unavailable (e.g. brand-new account, data not yet propagated, or no account at all). */
+  storageUsedMB: number | null;
+}
+
 export interface RemoveAliasRequestBody {
   oldWorkspaceEmails: string[];
 }
@@ -124,6 +131,10 @@ export interface RenameRequest {
   processedBy: string | null;
   processedAt: string | null;
   createdAt: string;
+  /** Cached employee details from the submitting app — null for old app builds/older requests. */
+  fullName: string | null;
+  personalEmail: string | null;
+  mobile: string | null;
 }
 
 export interface CreateRenameRequestBody {
@@ -131,4 +142,56 @@ export interface CreateRenameRequestBody {
   requestType: RenameRequestType;
   currentEmail?: string;
   note?: string;
+  fullName?: string;
+  personalEmail?: string;
+  mobile?: string;
+}
+
+/**
+ * Opaque paging position for listRenameRequests — the last row's sort key.
+ * createdAtEpoch is EXTRACT(EPOCH FROM created_at), not an ISO string: a
+ * TIMESTAMPTZ round-tripped through the driver as a string loses precision
+ * (JS Date is millisecond-only, Postgres stores microseconds), which let the
+ * boundary row re-match its own truncated cursor on the next page. A double
+ * precision epoch value round-trips losslessly as a JS number.
+ */
+export interface RenameRequestCursor {
+  createdAtEpoch: number;
+  id: string;
+}
+
+export interface RenameRequestsPage {
+  requests: RenameRequest[];
+  /** Base64url-encoded RenameRequestCursor, or null if this is the last page. */
+  nextCursor: string | null;
+}
+
+/**
+ * An old address kept as a Workspace alias after a rename/reactivation
+ * (see renameAccount() in googleAdmin.ts), pending manual removal from the
+ * admin panel's Alias tab.
+ */
+export interface AliasRecord {
+  id: string;
+  employeeId: string;
+  oldEmail: string;
+  newEmail: string;
+  requestId: string | null;
+  createdAt: string;
+}
+
+export interface AliasRemovalItemResult {
+  id: string;
+  email: string;
+  status: "removed" | "failed";
+  primaryEmail?: string;
+  message: string;
+}
+
+export interface AliasRemovalResult {
+  total: number;
+  removed: number;
+  failed: number;
+  results: AliasRemovalItemResult[];
+  message: string;
 }

@@ -28,8 +28,9 @@ These no longer accept `API_SECRET_TOKEN` at all — only a signed-in admin sess
 
 - **`EmployeeData`** — `employeeId`, `firstName`, `lastName?`, `fullName`, `mobile`, `personalEmail`, `employeeType?`, `schoolId?`, `macId?`. Sourced from the external employee API (`src/lib/employeeApi.ts`).
 - **`WorkspaceAccount`** — `primaryEmail`, `fullName`, `suspended`, `orgUnitPath?`, `lastLoginTime?`, `isNewFormat` (matches `employeeid.firstname@domain` pattern).
-- **`RenameRequest`** — `id`, `employeeId`, `requestType` (`0 | 1` — `0` = creation, `1` = reactivation), `currentEmail` (nullable — only set for `requestType: 1`), `note`, `status` (`"pending" | "approved" | "rejected"`), `adminNote`, `processedBy`, `processedAt`, `createdAt`.
+- **`RenameRequest`** — `id`, `employeeId`, `requestType` (`0 | 1` — `0` = creation, `1` = reactivation), `currentEmail` (nullable — only set for `requestType: 1`), `note`, `status` (`"pending" | "approved" | "rejected"`), `adminNote`, `processedBy`, `processedAt`, `createdAt`, plus `fullName`/`personalEmail`/`mobile` (nullable — cached employee details from the submitting app; see §3.5).
 - **`ActionTaken`** — outcome of a provisioning run: `"created" | "renamed" | "updated" | "manual_review_multiple_accounts" | "error"`.
+- **`AliasRecord`** — `id`, `employeeId`, `oldEmail`, `newEmail`, `requestId` (nullable), `createdAt`. One row per old address kept as a Workspace alias after a rename, pending manual removal (§3.6, §4.2).
 
 ## 3. API Reference
 
@@ -167,8 +168,10 @@ Errors: via `ProvisionError` — `400` invalid ID / missing personal email / inv
 
 ### 3.3 Alias management
 
+By design, `renameAccount()` (`src/lib/googleAdmin.ts`) no longer deletes the old address as a Workspace alias immediately after a rename — Google keeps it live automatically, so the old address keeps forwarding mail during a grace period. The rename-request approval flow tracks it in the `alias` table (§5) instead; it's removed later via the admin panel's Alias tab (§3.6, §4.2), not at rename time.
+
 #### `POST /api/workspace-alias/remove`
-Removes one or more old email aliases from whatever Workspace account currently owns them. No emails are sent.
+Removes one or more old email aliases from whatever Workspace account currently owns them. No emails are sent. This is the low-level primitive both the "Manage accounts" tab's ad hoc alias-removal form and the Alias tab's bulk removal (`POST /api/admin/aliases/remove`) are built on.
 
 Request:
 ```json
@@ -257,13 +260,16 @@ Request — creation (`requestType: 0`, no existing account):
   "note": "New joiner, no prior Workspace account."
 }
 ```
-Request — reactivation (`requestType: 1`, `currentEmail` required):
+Request — reactivation (`requestType: 1`, `currentEmail` required), with the optional cached-employee-details fields:
 ```json
 {
   "employeeId": "20171146",
   "requestType": 1,
   "currentEmail": "241644.sheetal@doe.delhi.gov.in",
-  "note": "Old account was under a stale employee ID prefix."
+  "note": "Old account was under a stale employee ID prefix.",
+  "fullName": "Mrs Sheetal",
+  "personalEmail": "sheetal@example.com",
+  "mobile": "9876543210"
 }
 ```
 Response `201`:
@@ -279,11 +285,16 @@ Response `201`:
     "adminNote": null,
     "processedBy": null,
     "processedAt": null,
-    "createdAt": "2026-08-04T09:12:03.000Z"
+    "createdAt": "2026-08-04T09:12:03.000Z",
+    "fullName": "Mrs Sheetal",
+    "personalEmail": "sheetal@example.com",
+    "mobile": "9876543210"
   }
 }
 ```
 Validation: `requestType` must be `0` or `1` (`400` otherwise); `currentEmail` is required and validated when `requestType` is `1`, optional (but still validated if present) when `requestType` is `0`. The target Workspace email is decided later by the admin during review (`POST /api/admin/rename-requests/{id}/approve`), not submitted with the request.
+
+`fullName`, `personalEmail`, `mobile` are all **optional** and purely a display cache for the admin review panel (§3.6, §4.2) — they let the panel skip the live `employee-lookup` call. They're never treated as authoritative: `provisionEmployee()` (`src/lib/provision.ts`) always re-fetches fresh data from the employee API when the request is approved, regardless of what was cached here. An app build that doesn't send them (or sends only some) is unaffected — `personalEmail` is silently dropped if it's not a valid email address rather than failing the request, and the admin panel falls back to the live lookup whenever any of the three is missing.
 
 #### `GET /api/request-status`
 Lets an employee list and track every request filed under their employee ID (both types, all statuses).
@@ -322,14 +333,35 @@ Request: `{ "password": "..." }` (checked against `ADMIN_PASSWORD` with a timing
 No body. Clears the session cookie, returns `{ "ok": true }`.
 
 #### `GET /api/admin/rename-requests`
-Lists requests for the review queue, optionally filtered by status.
+Lists requests for the review queue — filterable by status, employee ID, and date range, keyset-paginated (`src/lib/requests.ts: listRenameRequests`).
 
-Request: `GET /api/admin/rename-requests?status=pending` (`status` one of `pending|approved|rejected`; omit for all, pending-first).
+Query params (all optional):
+- `status` — one of `pending|approved|rejected`; omit for all statuses.
+- `employeeId` — substring match against the employee ID.
+- `startDate`, `endDate` — `YYYY-MM-DD`, inclusive, filtered on `created_at`.
+- `cursor` — opaque value from a previous response's `nextCursor`; omit for the first page.
+- `limit` — page size, default 20, max 100.
 
-Response `200`: `{ "requests": [ /* RenameRequest[] */ ] }`
+Sort order: `pending` is oldest-first (FIFO queue); every other view (including no `status`/all) is newest-first. Pagination is keyset-based on `(created_at, id)`, not offset — stable even as new requests are inserted mid-browse.
+
+Request: `GET /api/admin/rename-requests?status=pending&employeeId=2017&startDate=2026-08-01&endDate=2026-08-08`
+
+Response `200`:
+```json
+{
+  "requests": [ /* RenameRequest[], up to `limit` items */ ],
+  "nextCursor": "eyJjcmVhdGVkQXQiOi..."
+}
+```
+`nextCursor` is `null` once there are no more matching rows — pass it back as the `cursor` query param to fetch the next page.
+
+#### `GET /api/admin/rename-requests/counts`
+Per-status counts for the filter tab badges (`getRenameRequestStatusCounts`). Counts the whole table, ignoring the `employeeId`/date-range filters — always the totals for Pending/Approved/Rejected/All.
+
+Response `200`: `{ "counts": { "pending": 3, "approved": 12, "rejected": 1, "all": 16 } }`
 
 #### `POST /api/admin/employee-lookup`
-Combines `fetchEmployeeData` + an old-account Workspace lookup in one call — used to prefill the review form for a pending request.
+Combines `fetchEmployeeData` + an old-account Workspace lookup in one call — used to prefill the review form for a pending request. The admin panel only calls this as a **fallback** when the request has no cached `fullName`/`personalEmail`/`mobile` (§3.5) — otherwise it uses those directly plus `POST /api/admin/expected-username` below, skipping this call (and its external API round trips) entirely.
 
 Request: `{ "employeeId": "20171146", "currentEmail": "241644.sheetal@doe.delhi.gov.in" }` (`currentEmail` optional — omit for creation requests).
 
@@ -344,14 +376,79 @@ Response `200`:
 ```
 Errors: `400` invalid employee ID, `404` employee not found.
 
+#### `POST /api/admin/expected-username`
+Pure formatting — no employee API or Workspace calls (`buildExpectedUsername`, `src/lib/username.ts`). Used by the review panel's fast path to compute the target username from a request's cached `fullName` without a live lookup.
+
+Request: `{ "employeeId": "20171146", "fullName": "Mrs Sheetal" }`
+
+Response `200`: `{ "expectedUsername": "20171146.sheetal@doe.delhi.gov.in" }`. Errors: `400` invalid employee ID or missing `fullName`.
+
+#### `POST /api/admin/workspace-account-status`
+Looks up an arbitrary Workspace address — used by the review panel to check whether the old/target addresses on a rename request already exist, their suspended state, and (best-effort) storage usage. Wraps `getWorkspaceAccountByEmail` + `getUserStorageUsageMB` (`src/lib/googleAdmin.ts`).
+
+Request: `{ "email": "20171146.sheetal@doe.delhi.gov.in" }`
+
+Response `200` (account exists):
+```json
+{
+  "account": { "primaryEmail": "20171146.sheetal@doe.delhi.gov.in", "fullName": "Mrs Sheetal", "suspended": false, "isNewFormat": true },
+  "storageUsedMB": 4821,
+  "logs": []
+}
+```
+Response `200` (no account at that address): `{ "account": null, "storageUsedMB": null, "logs": [] }`.
+
+`storageUsedMB` comes from the Admin Reports API (`accounts:used_quota_in_mb`), which lags 1-3 days behind — it's `null` for brand-new/just-renamed accounts even when `account` is non-null. A storage-lookup failure (e.g. missing `admin.reports.usage.readonly` scope — see README) doesn't fail the request; it's noted in `logs` and `storageUsedMB` stays `null`.
+
+Errors: `400` missing/invalid `email`.
+
 #### `POST /api/admin/rename-requests/{id}/approve`
-Runs the full `provisionEmployee()` flow (same engine as `/api/process`) using the request's `employeeId`/`currentEmail`, then marks the request `approved`.
+Runs the full `provisionEmployee()` flow (same engine as `/api/process`) using the request's `employeeId`/`currentEmail`, then marks the request `approved`. If the outcome was `action: "renamed"` (old email ≠ new email), it also records the old→new mapping in the `alias` table (`createAliasRecord`, §5) — best-effort, a failure here doesn't fail the approval since the account was already successfully provisioned.
 
 Request: `{ "fullName": "Mrs Sheetal", "targetWorkspaceEmail": "20171146.sheetal@doe.delhi.gov.in", "adminNote": "Verified against HR record." }`
 
 Response `200`: `{ "request": { /* updated RenameRequest, status: "approved" */ }, "result": { /* ProcessResult, same shape as /api/process */ } }`
 
 Errors: `404` request not found, `409` request already processed, plus any `ProvisionError` from the underlying provisioning run.
+
+#### `GET /api/admin/aliases`
+Lists all tracked aliases pending removal (`listAliases`), newest first.
+
+Response `200`:
+```json
+{
+  "aliases": [
+    {
+      "id": "b3e1...",
+      "employeeId": "20171146",
+      "oldEmail": "241644.sheetal@doe.delhi.gov.in",
+      "newEmail": "20171146.sheetal@doe.delhi.gov.in",
+      "requestId": "3f2a9c10-...",
+      "createdAt": "2026-08-04T09:20:11.000Z"
+    }
+  ]
+}
+```
+
+#### `POST /api/admin/aliases/remove`
+Removes the given tracked aliases from Workspace (`removeAliasByEmail`, same primitive as `POST /api/workspace-alias/remove`), then deletes only the ones that actually succeeded from the `alias` table — failed ones (e.g. already gone) stay listed for a retry.
+
+Request: `{ "ids": ["b3e1...", "c4f2..."] }`
+
+Response `200`:
+```json
+{
+  "total": 2,
+  "removed": 1,
+  "failed": 1,
+  "results": [
+    { "id": "b3e1...", "email": "241644.sheetal@doe.delhi.gov.in", "status": "removed", "primaryEmail": "20171146.sheetal@doe.delhi.gov.in", "message": "Removed from 20171146.sheetal@doe.delhi.gov.in." },
+    { "id": "c4f2...", "email": "old.name@doe.delhi.gov.in", "status": "failed", "message": "No Workspace account was found for this email." }
+  ],
+  "message": "Removed 1 alias; 1 failed."
+}
+```
+Errors: `400` no IDs given.
 
 #### `POST /api/admin/rename-requests/{id}/reject`
 Request: `{ "adminNote": "Employee ID doesn't match HR records." }` (optional).
@@ -391,10 +488,11 @@ Response `200`: `{ "enabled": false }`. Errors: `400 { "error": "\`enabled\` mus
 
 ### 4.2 Admin dashboard (`/admin`, `src/app/admin/page.tsx`)
 
-The dashboard has two tabs, switched client-side (no route change):
+The dashboard has three tabs, switched client-side (no route change):
 
 - **Rename requests** — the approval queue (default tab).
 - **Manage accounts** — the account-management form, rendered by `src/app/admin/ManageAccountsPanel.tsx`.
+- **Alias** — tracked old-address aliases pending removal, rendered by `src/app/admin/AliasPanel.tsx`.
 
 | Button | Calls | Underlying function(s) | Result |
 |---|---|---|---|
@@ -405,15 +503,27 @@ The dashboard has two tabs, switched client-side (no route change):
 
 | Button | Calls | Underlying function(s) | Result |
 |---|---|---|---|
-| **Pending / Approved / Rejected / All** filter tabs | `GET /api/admin/rename-requests?status=...` | `listRenameRequests` | Refreshes the request list |
-| **Review** (only on pending requests) | `POST /api/admin/employee-lookup` | `fetchEmployeeData`, `findWorkspaceAccountByEmail` | Opens the review panel, prefilled with employee ID, mobile, personal email, and — for `requestType: 1` (reactivation) requests — the old Workspace email + its account's full name |
+| **Pending / Approved / Rejected / All** filter tabs (each shows a count badge) | `GET /api/admin/rename-requests?status=...`; badge counts from `GET /api/admin/rename-requests/counts` | `listRenameRequests`, `getRenameRequestStatusCounts` | Refreshes the request list from page 1 (resets any active pagination); count badges refresh on mount and after Approve/Reject |
+| **Search employee ID** (debounced ~400ms) | `GET /api/admin/rename-requests?employeeId=...` | `listRenameRequests` | Substring-filters the list within the current status tab |
+| **From / To** date pickers | `GET /api/admin/rename-requests?startDate=...&endDate=...` | `listRenameRequests` | Filters to requests submitted within that inclusive range |
+| **Clear filters** (shown once search/dates are set) | (local state only) | — | Resets search + date range to empty |
+| **Load more** (shown while more pages remain) | `GET /api/admin/rename-requests?cursor=...` | `listRenameRequests` | Appends the next page using the keyset cursor from the previous response |
+| **Review** (only on pending requests) | Fast path: `POST /api/admin/expected-username` only, if the request has cached `fullName`/`personalEmail`/`mobile` (§3.5). Fallback: `POST /api/admin/employee-lookup` otherwise | `fetchEmployeeData`, `findWorkspaceAccountByEmail` (fallback only) | Opens the review panel, prefilled with employee ID, mobile, personal email, and — for `requestType: 1` (reactivation) requests — the old Workspace email + its account's full name |
 | **Rename & Activate** (approve) | `POST /api/admin/rename-requests/{id}/approve` | `provisionEmployee`, `markRenameRequestProcessed` | Runs create/rename/reactivate, marks request `approved`, shows outcome message |
 | **Reject** | `POST /api/admin/rename-requests/{id}/reject` | `markRenameRequestProcessed` | Marks request `rejected` |
 | **Close** | (local state only) | — | Collapses the review panel without submitting |
+| **Show details / Hide details** (Approved/Rejected cards only) | (local state only) | — | Expands the card to show Request ID, request type, current email, note, admin note, processed by/at, and submitted date — all from already-loaded data, no extra API call |
 
-The review panel is split into two sections:
-- **Employee details** (read-only, from `POST /api/admin/employee-lookup`): Employee ID, Full Name, Mobile number, Email (personal email).
-- **Workspace details**: Full name (editable — what gets set on the Workspace account), Old Workspace email (read-only, shown only when `requestType` is `1`/reactivation), Target new email (editable).
+The review panel is laid out as a two-column table — **Employee details** on the left, **Workspace details** on the right — with each row pairing a matched pair of fields so, e.g., the employee's Full Name sits on the same row as the editable Workspace full name:
+
+| Employee details (read-only, from `POST /api/admin/employee-lookup`) | Workspace details |
+|---|---|
+| Employee ID | Old Workspace email (read-only, `requestType: 1` only) + live status badge |
+| Full Name | Full name (editable — what gets set on the Workspace account) |
+| Mobile number | Target new email (editable) + live status badge |
+| Email (personal email) | — |
+
+The status badge under each Workspace email — fed by `POST /api/admin/workspace-account-status` — shows whether an account already exists at that address and, if so, **Active**/**Suspended** plus its storage usage (`getUserStorageUsageMB`, best-effort, see §3.6). The old-email badge fetches once when the panel opens; the target-email badge re-fetches ~500ms after the admin stops typing in that field.
 
 #### "Manage accounts" tab
 
@@ -425,6 +535,13 @@ The review panel is split into two sections:
 | **De-register employee** (inside Tab details) | `POST /api/tablet/unregister` | `callDoeTabletApi`, `sendTabletDeregisteredEmail` | Inline success/failure message |
 | **Reset guest teacher password** (inside Tab details, only shown for IDs >8 digits) | `POST /api/guest/password-reset` | `callDoeTabletApi` | Inline success/failure message |
 | **Remove aliases** | `POST /api/workspace-alias/remove` | `removeAliasByEmail` (looped per email) | Per-email removed/failed list |
+
+#### "Alias" tab
+
+| Button | Calls | Underlying function(s) | Result |
+|---|---|---|---|
+| (on load) | `GET /api/admin/aliases` | `listAliases` | Lists every tracked alias — employee ID, old→new email, submitted date |
+| **Remove aliases (N)** | `POST /api/admin/aliases/remove` with every currently-listed alias's ID | `removeAliasByEmail` (looped), `deleteAliasRecords` | Removes each from Workspace; only the ones that succeeded are dropped from the list (and the DB) — failures stay for a retry, shown per-row |
 
 ## 5. Database
 
@@ -442,8 +559,11 @@ admin_note     TEXT
 processed_by   TEXT
 processed_at   TIMESTAMPTZ
 created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+full_name      TEXT                                    -- nullable; cached from the submitting app, display-only (§3.5)
+personal_email TEXT                                    -- nullable; same
+mobile         TEXT                                    -- nullable; same
 ```
-Indexed on `(status, created_at DESC)` for the admin queue.
+Indexed on `(status, created_at DESC)` for the admin queue. `listRenameRequests` (§3.6) paginates by keyset on `(created_at, id)` rather than `OFFSET`, so the same index serves cursor lookups regardless of how deep into a filtered view the admin has paged.
 
 Single-row table `kill_switch`, backing the [feature kill switch](#37-feature-kill-switch):
 
@@ -453,6 +573,18 @@ enabled        BOOLEAN NOT NULL DEFAULT true
 updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 ```
 Seeded with `(1, true)` on first run via `ON CONFLICT (id) DO NOTHING`.
+
+Table `alias` — old addresses kept as Workspace aliases after a rename/reactivation (§3.3), pending manual removal via the admin panel's Alias tab (`src/lib/aliases.ts`):
+
+```
+id             UUID PRIMARY KEY DEFAULT gen_random_uuid()
+employee_id    TEXT NOT NULL
+old_email      TEXT NOT NULL                          -- unique; the alias itself
+new_email      TEXT NOT NULL
+request_id     UUID REFERENCES rename_requests (id)
+created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+```
+Unique index on `old_email` — inserting a duplicate is a no-op (`ON CONFLICT (old_email) DO NOTHING`). A row is inserted by `POST /api/admin/rename-requests/{id}/approve` whenever a rename outcome changes the primary email, and deleted once `POST /api/admin/aliases/remove` successfully removes it from Workspace.
 
 ## 6. Notifications
 

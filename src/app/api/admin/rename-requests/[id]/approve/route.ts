@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { createAliasRecord } from "@/lib/aliases";
 import { getRenameRequestById, markRenameRequestProcessed } from "@/lib/requests";
 import { ProvisionError, provisionEmployee } from "@/lib/provision";
 
@@ -33,6 +34,21 @@ export async function POST(
       fullName: body.fullName,
       targetWorkspaceEmail: body.targetWorkspaceEmail || undefined,
     });
+
+    // Best-effort — the account was already successfully provisioned above,
+    // so a failure here shouldn't fail the whole approval.
+    if (result.action === "renamed" && result.finalAccount) {
+      const oldEmail = result.matchedAccounts[0]?.primaryEmail;
+      const newEmail = result.finalAccount.primaryEmail;
+      if (oldEmail && newEmail && oldEmail.toLowerCase() !== newEmail.toLowerCase()) {
+        await createAliasRecord({
+          employeeId: request.employeeId,
+          oldEmail,
+          newEmail,
+          requestId: request.id,
+        }).catch((err) => console.error("Failed to record alias:", err));
+      }
+    }
 
     const updated = await markRenameRequestProcessed(id, "approved", body.adminNote);
     return NextResponse.json({ request: updated, result });

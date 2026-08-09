@@ -20,6 +20,11 @@ Use one of these Vercel environment variables:
 
 Also set `GOOGLE_ADMIN_IMPERSONATE_EMAIL` to the Workspace admin account used for domain-wide delegation.
 
+Domain-wide delegation must authorize these scopes (Workspace Admin console → Security → API controls → Domain-wide delegation) for the service account's client ID:
+
+- `https://www.googleapis.com/auth/admin.directory.user` — account create/rename/lookup.
+- `https://www.googleapis.com/auth/admin.reports.usage.readonly` — per-account storage usage shown in the admin review panel. Usage reports typically lag 1-3 days, so this returns `null` for brand-new or just-renamed accounts until Google generates a report for them.
+
 ## API Auth
 
 When `API_SECRET_TOKEN` is set, every `/api/*` request must include one of:

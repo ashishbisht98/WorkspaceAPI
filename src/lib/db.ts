@@ -19,6 +19,11 @@ export function sql(strings: TemplateStringsArray, ...values: unknown[]) {
   return getSql()(strings, ...values);
 }
 
+/** For queries whose shape (WHERE clauses, ORDER BY direction) varies at runtime — use `$1`, `$2`, ... placeholders. */
+export function sqlQuery(text: string, params: unknown[] = []) {
+  return getSql().query(text, params);
+}
+
 let schemaReady: Promise<void> | null = null;
 
 /** Idempotent — safe to call at the top of every request handler that touches the DB. */
@@ -63,6 +68,14 @@ export function ensureSchema(): Promise<void> {
       await sql`ALTER TABLE rename_requests ALTER COLUMN current_email DROP NOT NULL`;
       await sql`CREATE INDEX IF NOT EXISTS rename_requests_status_idx ON rename_requests (status, created_at DESC)`;
 
+      // Cached employee details from the submitting app, so the admin review
+      // panel can skip the live employee-lookup call. Nullable — old app
+      // builds and requests submitted before this column existed just don't
+      // populate them, and the admin panel falls back to a live lookup.
+      await sql`ALTER TABLE rename_requests ADD COLUMN IF NOT EXISTS full_name TEXT`;
+      await sql`ALTER TABLE rename_requests ADD COLUMN IF NOT EXISTS personal_email TEXT`;
+      await sql`ALTER TABLE rename_requests ADD COLUMN IF NOT EXISTS mobile TEXT`;
+
       await sql`
         CREATE TABLE IF NOT EXISTS kill_switch (
           id INTEGER PRIMARY KEY,
@@ -71,6 +84,21 @@ export function ensureSchema(): Promise<void> {
         )
       `;
       await sql`INSERT INTO kill_switch (id, enabled) VALUES (1, true) ON CONFLICT (id) DO NOTHING`;
+
+      // Old addresses kept as Workspace aliases after a rename/reactivation
+      // (see renameAccount() in googleAdmin.ts), pending manual cleanup from
+      // the admin panel's Alias tab.
+      await sql`
+        CREATE TABLE IF NOT EXISTS alias (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          employee_id TEXT NOT NULL,
+          old_email TEXT NOT NULL,
+          new_email TEXT NOT NULL,
+          request_id UUID REFERENCES rename_requests (id),
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+      `;
+      await sql`CREATE UNIQUE INDEX IF NOT EXISTS alias_old_email_idx ON alias (old_email)`;
     })().catch((err) => {
       schemaReady = null;
       throw err;
