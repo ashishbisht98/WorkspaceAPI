@@ -511,9 +511,9 @@ export default function AdminDashboardPage() {
         <div className="mb-8 flex gap-2 border-b border-(--rule)">
           {(
             [
-              { key: "requests", label: "Rename requests" },
-              { key: "manage", label: "Manage accounts" },
+              { key: "requests", label: "Requests" },
               { key: "alias", label: "Alias" },
+              { key: "manage", label: "TabMan" },
             ] as const
           ).map((t) => (
             <button
