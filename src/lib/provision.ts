@@ -17,7 +17,7 @@ import {
   isValidEmployeeId,
   isValidPersonalEmail,
 } from "./username";
-import { ProcessRequestBody, ProcessResult } from "./types";
+import { EmployeeData, ProcessRequestBody, ProcessResult } from "./types";
 
 export class ProvisionError extends Error {
   status: number;
@@ -72,19 +72,37 @@ async function runProvisionEmployee(
   const employeeId = (body.employeeId || "").trim();
   const oldWorkspaceEmail = body.oldWorkspaceEmail?.trim() || undefined;
   const fullNameOverride = body.fullName?.trim();
+  const personalEmailOverride = body.personalEmail?.trim();
+  const mobileOverride = body.mobile?.trim();
   const targetWorkspaceEmailOverride = body.targetWorkspaceEmail?.trim();
 
   if (!isValidEmployeeId(employeeId)) {
     throw new ProvisionError("Employee ID must be exactly 8 digits.", 400, logs);
   }
 
-  log(`Fetching employee data for ${employeeId}...`);
-  const employee = await fetchEmployeeData(employeeId);
-  if (fullNameOverride) {
+  let employee: EmployeeData;
+  if (fullNameOverride && personalEmailOverride && mobileOverride) {
+    // Full details already known (submitted by the app, or cached from an
+    // earlier request) — skip the live DOE lookup entirely.
     const { firstName, lastName } = splitName(fullNameOverride);
-    employee.fullName = fullNameOverride;
-    employee.firstName = firstName;
-    employee.lastName = lastName;
+    employee = {
+      employeeId,
+      firstName,
+      lastName,
+      fullName: fullNameOverride,
+      mobile: mobileOverride,
+      personalEmail: personalEmailOverride,
+    };
+    log(`Using submitted employee details for ${employeeId} (skipped live lookup).`);
+  } else {
+    log(`Fetching employee data for ${employeeId}...`);
+    employee = await fetchEmployeeData(employeeId);
+    if (fullNameOverride) {
+      const { firstName, lastName } = splitName(fullNameOverride);
+      employee.fullName = fullNameOverride;
+      employee.firstName = firstName;
+      employee.lastName = lastName;
+    }
   }
   log(`Found: ${employee.fullName} (${employee.mobile}, ${employee.personalEmail})`);
 

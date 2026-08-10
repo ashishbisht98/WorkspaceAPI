@@ -51,6 +51,9 @@ export interface ProcessRequestBody {
   employeeId: string;
   oldWorkspaceEmail?: string;
   fullName?: string;
+  /** With mobile, lets provisionEmployee skip the live DOE lookup entirely. */
+  personalEmail?: string;
+  mobile?: string;
   targetWorkspaceEmail?: string;
 }
 

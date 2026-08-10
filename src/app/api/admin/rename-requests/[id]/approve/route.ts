@@ -31,7 +31,9 @@ export async function POST(
     const result = await provisionEmployee({
       employeeId: request.employeeId,
       oldWorkspaceEmail: request.currentEmail || undefined,
-      fullName: body.fullName,
+      fullName: body.fullName || request.fullName || undefined,
+      personalEmail: request.personalEmail || undefined,
+      mobile: request.mobile || undefined,
       targetWorkspaceEmail: body.targetWorkspaceEmail || undefined,
     });
 
