@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
 import { getKillSwitchEnabled } from "@/lib/killSwitch";
 
-// Edge, not Node — this was the single most-invoked route in the app, and
-// Edge Config reads here don't count as a Serverless Function Invocation.
-export const runtime = "edge";
-export const dynamic = "force-dynamic";
+// Cached at Vercel's CDN for 60s (see revalidate below) so polling clients
+// hit the cache instead of invoking this function on every request. That
+// only works because this route is excluded from proxy.ts's auth check —
+// an authenticated response can't be served from a shared public cache.
+export const revalidate = 60;
 
 /** Lets callers check whether the feature is currently enabled before proceeding. */
 export async function GET() {

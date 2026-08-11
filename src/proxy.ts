@@ -85,5 +85,8 @@ async function handleAdminAuth(request: NextRequest, pathname: string) {
 }
 
 export const config = {
-  matcher: ["/api/:path*", "/admin/:path*"],
+  // /api/kill-switch is deliberately excluded: it's a public, unauthenticated
+  // read so Vercel can serve it from CDN cache (see revalidate in its route)
+  // instead of invoking this middleware on every poll.
+  matcher: ["/api/((?!kill-switch$).*)", "/admin/:path*"],
 };
