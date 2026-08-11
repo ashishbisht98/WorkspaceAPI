@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
 import { getKillSwitchEnabled } from "@/lib/killSwitch";
 
-export const runtime = "nodejs";
+// Edge, not Node — this was the single most-invoked route in the app, and
+// Edge Config reads here don't count as a Serverless Function Invocation.
+export const runtime = "edge";
 export const dynamic = "force-dynamic";
 
 /** Lets callers check whether the feature is currently enabled before proceeding. */

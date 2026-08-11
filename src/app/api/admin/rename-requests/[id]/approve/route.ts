@@ -37,6 +37,17 @@ export async function POST(
       targetWorkspaceEmail: body.targetWorkspaceEmail || undefined,
     });
 
+    // provisionEmployee reports non-fatal outcomes (e.g. multiple matching
+    // accounts) as a 200 with action !== a real provisioning result, rather
+    // than throwing — don't mark the request approved when nothing was
+    // actually done to the Workspace account.
+    if (result.action !== "created" && result.action !== "renamed" && result.action !== "updated") {
+      return NextResponse.json(
+        { error: result.message || "Provisioning requires manual review.", logs: result.logs, result },
+        { status: 409 },
+      );
+    }
+
     // Best-effort — the account was already successfully provisioned above,
     // so a failure here shouldn't fail the whole approval.
     if (result.action === "renamed" && result.finalAccount) {

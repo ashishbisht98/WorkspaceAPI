@@ -457,10 +457,10 @@ Response `200`: `{ "request": { /* updated RenameRequest, status: "rejected" */ 
 
 ### 3.7 Feature kill switch
 
-A single boolean flag (`kill_switch` table, one row, see §5) that lets an admin disable a feature without a deploy. Reads/writes go through `src/lib/killSwitch.ts` (`getKillSwitchEnabled`, `setKillSwitchEnabled`).
+A single boolean flag that lets an admin disable a feature without a deploy. It lives in **Vercel Edge Config** (key `killSwitchEnabled`), not Postgres — this was by far the most-invoked route in the app, and Edge Config reads don't count as a Serverless Function Invocation. Reads/writes go through `src/lib/killSwitch.ts` (`getKillSwitchEnabled`, `setKillSwitchEnabled`); see README.md for the Edge Config store setup and required env vars (`EDGE_CONFIG`, `EDGE_CONFIG_ID`, `VERCEL_TEAM_ID`, `VERCEL_ACCESS_TOKEN`).
 
 #### `GET /api/kill-switch`
-Public read endpoint — not under `/api/admin`, so it's on the generic `API_SECRET_TOKEN` gate (see §1), not the admin session.
+Public read endpoint — not under `/api/admin`, so it's on the generic `API_SECRET_TOKEN` gate (see §1), not the admin session. Runs on the **edge runtime**, reading straight from Edge Config (no DB round trip).
 
 Response `200`: `{ "enabled": true }`
 
@@ -474,7 +474,7 @@ Admin-only. Sets the flag.
 
 Request: `{ "enabled": false }`
 
-Response `200`: `{ "enabled": false }`. Errors: `400 { "error": "\`enabled\` must be a boolean." }`.
+Response `200`: `{ "enabled": false }`. Errors: `400 { "error": "\`enabled\` must be a boolean." }`, `500` if `EDGE_CONFIG_ID`/`VERCEL_ACCESS_TOKEN` aren't configured. Writes go through Vercel's Management API (a plain `EDGE_CONFIG` connection string is read-only) and are eventually consistent — up to a few seconds to propagate to all edge nodes.
 
 ## 4. UI pages and action-button flows
 
@@ -565,13 +565,7 @@ mobile         TEXT                                    -- nullable; same
 ```
 Indexed on `(status, created_at DESC)` for the admin queue. `listRenameRequests` (§3.6) paginates by keyset on `(created_at, id)` rather than `OFFSET`, so the same index serves cursor lookups regardless of how deep into a filtered view the admin has paged.
 
-Single-row table `kill_switch`, backing the [feature kill switch](#37-feature-kill-switch):
-
-```
-id             INTEGER PRIMARY KEY              -- always 1
-enabled        BOOLEAN NOT NULL DEFAULT true
-updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
-```
+The [feature kill switch](#37-feature-kill-switch) no longer lives in Postgres — it moved to Vercel Edge Config. The old `kill_switch` table is no longer provisioned by `ensureSchema()`; any pre-existing table from before the migration is harmless and can be dropped manually.
 Seeded with `(1, true)` on first run via `ON CONFLICT (id) DO NOTHING`.
 
 Table `alias` — old addresses kept as Workspace aliases after a rename/reactivation (§3.3), pending manual removal via the admin panel's Alias tab (`src/lib/aliases.ts`):

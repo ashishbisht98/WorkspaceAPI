@@ -9,7 +9,36 @@ Next.js API routes for employee lookup, Google Workspace provisioning, alias rem
 3. Set `API_SECRET_TOKEN` to a long random value if the API will be reachable from the internet.
 4. Deploy.
 
-The app uses Node.js route handlers, not Edge functions, because it depends on `googleapis` and `nodemailer`.
+The app mostly uses Node.js route handlers, not Edge functions, because it depends on `googleapis` and `nodemailer`. The one exception is `/api/kill-switch`, which runs on the edge runtime against Vercel Edge Config (see below) — it was the single most-invoked route, and moving it off Serverless Functions avoids burning through the Function Invocation quota.
+
+## Kill switch (Vercel Edge Config)
+
+The feature kill switch (`/api/kill-switch`, `/api/admin/kill-switch`) is backed by Vercel Edge Config instead of Postgres, since it's read far more often than anything else in the app. One-time setup (Vercel CLI, run from the project root once linked with `vercel link`):
+
+```bash
+vercel edge-config add killswitch-config
+# Note the printed "id" (ecfg_...) as EDGE_CONFIG_ID below.
+
+vercel edge-config tokens killswitch-config --add production-read --format json
+# Build EDGE_CONFIG from the printed id + token:
+#   https://edge-config.vercel.com/<id>?token=<token>
+
+vercel env add EDGE_CONFIG production --value "<connection string above>" --yes
+vercel env add EDGE_CONFIG preview "" --value "<connection string above>" --yes --non-interactive
+vercel env add EDGE_CONFIG development --value "<connection string above>" --yes
+
+vercel env add EDGE_CONFIG_ID production --value "<ecfg_...>" --yes
+vercel env add VERCEL_TEAM_ID production --value "<orgId from .vercel/project.json>" --yes
+# repeat both for preview/development the same way as EDGE_CONFIG above
+
+# Seed the initial value:
+vercel edge-config update <ecfg_...> --patch '[{"operation":"upsert","key":"killSwitchEnabled","value":true}]'
+```
+
+Writes (the admin toggle) go through Vercel's Management API, not the read-only `EDGE_CONFIG` connection string — that needs a separate token with write access:
+
+- Create one at [vercel.com/account/tokens](https://vercel.com/account/tokens) and set it as `VERCEL_ACCESS_TOKEN`.
+- Writes are eventually consistent (seconds, not instant) across edge nodes.
 
 ## Google Credentials
 

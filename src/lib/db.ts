@@ -76,14 +76,10 @@ export function ensureSchema(): Promise<void> {
       await sql`ALTER TABLE rename_requests ADD COLUMN IF NOT EXISTS personal_email TEXT`;
       await sql`ALTER TABLE rename_requests ADD COLUMN IF NOT EXISTS mobile TEXT`;
 
-      await sql`
-        CREATE TABLE IF NOT EXISTS kill_switch (
-          id INTEGER PRIMARY KEY,
-          enabled BOOLEAN NOT NULL DEFAULT true,
-          updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-        )
-      `;
-      await sql`INSERT INTO kill_switch (id, enabled) VALUES (1, true) ON CONFLICT (id) DO NOTHING`;
+      // kill_switch table retired — the flag now lives in Vercel Edge Config
+      // (src/lib/killSwitch.ts), since it was the single most-invoked route
+      // and Edge Config reads don't cost a Function Invocation. Not dropped
+      // here to avoid touching existing data; safe to drop manually.
 
       // Old addresses kept as Workspace aliases after a rename/reactivation
       // (see renameAccount() in googleAdmin.ts), pending manual cleanup from

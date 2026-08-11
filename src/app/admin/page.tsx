@@ -41,7 +41,7 @@ type ReviewState = {
 
 const STORAGE_LIMIT_MB = 15 * 1024; // 15 GB
 const STORAGE_WARNING_NOTE =
-  "Note that your accounts exceed the storage limit of 15gb so kindly remove the excess data from this account immediately.";
+  "Note that your account exceed the storage limit of 15gb so kindly remove the excess data from this account immediately.";
 
 function formatSubmittedDate(iso: string): string {
   return new Date(iso).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" });
@@ -49,8 +49,8 @@ function formatSubmittedDate(iso: string): string {
 
 function buildAdminNote(requestType: RenameRequestType, personalEmail: string): string {
   return requestType === 0
-    ? `Account created and credentials sent to your email: ${personalEmail}`
-    : `Account reactivated and credentials sent to your mail: ${personalEmail}`;
+    ? `Account created and credentials sent to your email: ${personalEmail}.`
+    : `Account reactivated and credentials sent to your mail: ${personalEmail}.`;
 }
 
 async function fetchAccountStatus(email: string): Promise<AccountStatusState> {
