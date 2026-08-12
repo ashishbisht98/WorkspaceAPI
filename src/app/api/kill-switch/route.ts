@@ -1,22 +1,20 @@
 import { NextResponse } from "next/server";
-import { getKillSwitchEnabled } from "@/lib/killSwitch";
 
-// Cached at Vercel's CDN for 5 minutes (see revalidate below) so polling
-// clients hit the cache instead of invoking this function on every request.
-// That only works because this route is excluded from proxy.ts's auth check
-// — an authenticated response can't be served from a shared public cache.
-export const revalidate = 300;
+// Next.js 15+ made GET Route Handlers dynamic by default — this opts back
+// into static generation, which is what makes Vercel serve it as a CDN
+// asset instead of invoking a function.
+export const dynamic = "force-static";
 
-/** Lets callers check whether the feature is currently enabled before proceeding. */
+/**
+ * Hardcoded to always report enabled. This was consistently the biggest
+ * source of Vercel Function Invocations (polled continuously by the app),
+ * even after a 5min CDN cache. With no request data and no external calls,
+ * Next.js statically generates this response at build time, so Vercel
+ * serves it as a static CDN asset with zero function invocations.
+ *
+ * The admin kill-switch toggle / Edge Config value no longer affect this
+ * endpoint — flipping it won't change what the app receives here.
+ */
 export async function GET() {
-  try {
-    const enabled = await getKillSwitchEnabled();
-    return NextResponse.json({ enabled });
-  } catch (err: unknown) {
-    console.error(err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Unexpected error" },
-      { status: 500 },
-    );
-  }
+  return NextResponse.json({ enabled: true });
 }
