@@ -301,7 +301,13 @@ export default function AdminDashboardPage() {
         ) {
           adminNote = adminNote ? `${adminNote} ${STORAGE_WARNING_NOTE}` : STORAGE_WARNING_NOTE;
         }
-        return { ...prev, oldAccountStatus: status, adminNote };
+        // Prefer the old Workspace account's real name over the employee-record
+        // copy, but only if the admin hasn't already edited the field away
+        // from that default.
+        const oldFullName = status.account?.fullName?.trim();
+        const fullName =
+          oldFullName && prev.fullName === prev.details?.employee.fullName ? oldFullName : prev.fullName;
+        return { ...prev, oldAccountStatus: status, adminNote, fullName };
       });
     });
   }
